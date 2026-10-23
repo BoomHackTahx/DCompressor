@@ -66,8 +66,6 @@ Les compilations Linux et Windows sont vérifiées automatiquement par GitHub Ac
 
 ## Licence
 
-Aucune licence n’a encore été choisie. En attendant, tous les droits restent réservés par le titulaire du droit d’auteur.# DCompressor
-
 DCompressor is a cross-platform C++ desktop archive utility built with Qt 6 and libarchive.
 
 ## Features
