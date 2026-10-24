@@ -11,6 +11,7 @@
 #include <QMainWindow>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QStringList>
 #include <QStyle>
 #include <QStatusBar>
 #include <QTableWidget>
@@ -118,7 +119,6 @@ bool addPath(archive* writer, const fs::path& path, const fs::path& base, QStrin
     std::unique_ptr<archive_entry, decltype(&archive_entry_free)> entry(rawEntry, archive_entry_free);
     const std::u8string entryName = relativePath.generic_u8string();
     archive_entry_set_pathname_utf8(entry.get(), reinterpret_cast<const char*>(entryName.c_str()));
-    archive_entry_set_perm(entry.get(), 0644);
 
     const auto status = fs::symlink_status(path, filesystemError);
     if (filesystemError) {
@@ -134,6 +134,7 @@ bool addPath(archive* writer, const fs::path& path, const fs::path& base, QStrin
 
     if (fs::is_directory(status)) {
         archive_entry_set_filetype(entry.get(), AE_IFDIR);
+        archive_entry_set_perm(entry.get(), 0755);
         archive_entry_set_size(entry.get(), 0);
         if (archive_write_header(writer, entry.get()) != ARCHIVE_OK) {
             error = archiveError(writer, QStringLiteral("Impossible d’écrire l’entrée d’archive."));
@@ -152,6 +153,7 @@ bool addPath(archive* writer, const fs::path& path, const fs::path& base, QStrin
     }
 
     archive_entry_set_filetype(entry.get(), AE_IFREG);
+    archive_entry_set_perm(entry.get(), 0644);
     archive_entry_set_size(entry.get(), static_cast<la_int64_t>(fs::file_size(path)));
     std::error_code timeError;
     const auto modified = fs::last_write_time(path, timeError);
@@ -244,8 +246,12 @@ bool createArchive(const QString& outputPath, const QStringList& inputPaths, QSt
 }
 
 bool extractArchive(const QString& archivePath, const QString& destination, QString& error,
-                    const QString& selectedEntry = {}, bool includeDescendants = false)
+                    qint64& extractedCount, QStringList& extractedPaths,
+                    const QString& selectedEntry = {},
+                    bool includeDescendants = false)
 {
+    extractedCount = 0;
+    extractedPaths.clear();
     ArchiveReader reader(archive_read_new(), archive_read_free);
     archive_read_support_filter_all(reader.get());
     archive_read_support_format_all(reader.get());
@@ -323,7 +329,16 @@ bool extractArchive(const QString& archivePath, const QString& destination, QStr
             error = archiveError(diskWriter.get(), QStringLiteral("Impossible de finaliser un fichier extrait."));
             return false;
         }
+        std::error_code outputError;
+        const auto outputStatus = fs::symlink_status(outputPath, outputError);
+        if (outputError || !fs::exists(outputStatus)) {
+            error = QStringLiteral("L’entrée n’a pas été créée à l’emplacement attendu : %1")
+                        .arg(fromFilesystemPath(outputPath));
+            return false;
+        }
         extractedEntry = true;
+        ++extractedCount;
+        extractedPaths.push_back(fromFilesystemPath(outputPath));
     }
 
     if (result != ARCHIVE_EOF) {
@@ -550,8 +565,20 @@ private:
             includeDescendants = table_->item(selectedRow, 1)->text() == QStringLiteral("Dossier");
         }
         QString error;
-        const bool success = extractArchive(currentArchive_, destination, error, selectedEntry, includeDescendants);
-        showOperationResult(success, success ? QStringLiteral("Archive extraite.") : error);
+        qint64 extractedCount = 0;
+        QStringList extractedPaths;
+        const bool success = extractArchive(currentArchive_, destination, error, extractedCount, extractedPaths,
+                                            selectedEntry, includeDescendants);
+        if (success) {
+            const QString countMessage = extractedCount == 1
+                ? QStringLiteral("1 entrée extraite")
+                : QStringLiteral("%1 entrées extraites").arg(extractedCount);
+            QMessageBox::information(this, QStringLiteral("Extraction terminée"),
+                                     QStringLiteral("%1 :\n%2")
+                                         .arg(countMessage, extractedPaths.join(QLatin1Char('\n'))));
+        } else {
+            showOperationResult(false, error);
+        }
     }
 
     void loadArchive(const QString& path)
